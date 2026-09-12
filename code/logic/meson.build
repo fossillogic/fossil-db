@@ -8,9 +8,7 @@ dep = [
 
 fossil_crabdb_lib = library('fossil_crabdb',
     files(
-        'myshell.c',
-        'noshell.c',
-        'cacheshell.c'
+        'crabdb.c'
         ),
     install: true,
     dependencies: dep,

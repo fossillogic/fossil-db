@@ -1,19 +1,19 @@
-# ***Blue Crab by Fossil Logic***
+# CrabDB
 
-Blue Crab is a lightweight, portable key-value database built for speed, efficiency, and traceable data integrity.   It offers multiple interfaces to fit different workflows: **MyShell** for SQL-like commands with structured FSON queries, **NoShell** for direct key-value operations backed by a git-chain commit model, and **CacheShell** for in-memory caching with TTL and optional FSON serialization. Powered by the **git-chain experiment**, every change in Blue Crab can be versioned, branched, and merged like source code —  
-enabling transparent history, rollback, and auditability. The integrated **FSON type system** provides self-describing, schema-aware data structures for both simple and complex records.  
+CrabDB is a lightweight, embedded C database library with file-backed and in-memory database lifecycle management, table and record operations, typed values, transactions, result containers, and status reporting. Its API uses explicit ownership, dynamically sized collections, and pointer-free file persistence.
 
 ## Key Features
 
-| **Feature**                     | **MyShell**                                                                                                                                         | **NoShell**                                                                                                                                                     | **CacheShell**                                                                                                                                    |
-|---------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Portability & Cross-Platform** | Fully cross-platform, designed for integration across Linux, macOS, and Windows with minimal dependencies.                                          | Portable and dependency-light, works consistently across OSes and embedded systems.                                                                              | Lightweight and portable; in-memory cache functions identically across supported platforms.                                                       |
-| **Interface**                    | SQL-like command interface with support for structured FSON queries and schema reflection.                                                          | Minimalist key-value interface now extended with FSON-based structured records and git-chain commit tracking.                                                    | Key-value and TTL-based interface, FSON-encoded for cross-shell interoperability.                                                                 |
-| **CRUD Operations**              | Insert, find, update, and delete data using SQL-like commands, with git-chain-backed transactional history.                                          | Perform direct CRUD operations with git-chain commit tracking and FSON record serialization for full auditability.                                               | Insert, get, update, and remove cache entries; optionally commit snapshots into git-chain for audit persistence.                                  |
-| **Backup and Restore**           | Backup and restore now handled via git-chain commits, enabling branchable database states and rollbacks.                                            | Supports backup and restore through git-chain synchronization; each commit stores FSON diffs for efficient version tracking.                                     | Optional persistence through git-chain snapshots; supports branch-based cache state restoration.                                                  |
-| **API**                          | Intuitive C API supporting FSON object handling, commit/branch operations, and query execution layers.                                              | Simple C API for direct CRUD and commit operations; includes git-chain and FSON helper utilities for structured data encoding/decoding.                          | Lightweight API for in-memory caching and TTL; includes optional FSON serialization hooks for structured cache objects.                           |
-| **Memory Management**             | Optimized for large datasets with internal FSON caching and incremental git-chain commit diffing to reduce memory footprint.                        | Memory-efficient design; uses incremental FSON serialization and diff-based commit tracking to minimize data duplication.                                         | Efficient in-memory storage with periodic cleanup; supports TTL-based reclamation and optional FSON compression for cache entries.                |
-| **Database Management**          | Full support for create, open, close, branch, merge, and delete operations via git-chain; each state stored as a structured FSON snapshot.            | Supports open, close, sync, and merge of git-chain-backed databases; provides FSON-based schema introspection and consistency checks.                            | Simple cache lifecycle management with optional git-chain commit/merge support for replicable cache state management.                             |
+- Version and human-readable status-string APIs
+- File-backed database creation, opening, closing, and destruction
+- In-memory database creation for temporary, non-file-backed use
+- Database last-error access with explicit status reporting
+- Dynamic table management, including create, drop, rename, and existence checks
+- Record insertion, update, deletion, and table selection
+- Result containers with record counts and cleanup
+- Typed value creation, type inspection, and destruction
+- Transaction begin, commit, and rollback support for table changes
+- Status codes for invalid arguments, allocation failures, missing or existing objects, I/O errors, corruption, read-only state, and transaction or query failures
 
 ## ***Prerequisites***
 
@@ -34,7 +34,7 @@ Add the `fossil-db.wrap` file in your `subprojects` directory and include the fo
 ```ini
 [wrap-git]
 url = https://github.com/fossillogic/fossil-db.git
-revision = v1.0.1
+revision = v1.0.2
 
 [provide]
 dependency_names = fossil-db
