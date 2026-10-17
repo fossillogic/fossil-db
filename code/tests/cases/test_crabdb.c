@@ -328,6 +328,53 @@ FOSSIL_TEST(c_test_crabdb_table_edge_cases)
     fossil_db_crabdb_destroy(db);
 }
 
+FOSSIL_TEST(c_test_crabdb_value_lifecycle)
+{
+    fossil_db_crabdb_type_t types[] = {
+        FOSSIL_DB_CRABDB_TYPE_NULL,
+        FOSSIL_DB_CRABDB_TYPE_I32,
+        FOSSIL_DB_CRABDB_TYPE_CSTR,
+        FOSSIL_DB_CRABDB_TYPE_BOOL,
+        FOSSIL_DB_CRABDB_TYPE_ANY
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(types) / sizeof(types[0]); ++i) {
+        fossil_db_crabdb_value_t *value = NULL;
+        fossil_db_crabdb_status_t status = fossil_db_crabdb_value_create(&value, types[i]);
+
+        ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+        ASSUME_ITS_TRUE(value != NULL);
+        ASSUME_ITS_TRUE(fossil_db_crabdb_value_type(value) == types[i]);
+        fossil_db_crabdb_value_destroy(value);
+    }
+}
+
+FOSSIL_TEST(c_test_crabdb_table_rename_and_drop_missing)
+{
+    fossil_db_crabdb_status_t status;
+    fossil_db_crabdb_t *db = NULL;
+
+    status = fossil_db_crabdb_open_memory(&db);
+    ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+    ASSUME_ITS_TRUE(fossil_db_crabdb_rename_table(db, "absent", "new_name") != FOSSIL_DB_CRABDB_SUCCESS);
+    ASSUME_ITS_TRUE(fossil_db_crabdb_drop_table(db, "absent") != FOSSIL_DB_CRABDB_SUCCESS);
+
+    status = fossil_db_crabdb_create_table(db, "before_rename");
+    ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+    status = fossil_db_crabdb_rename_table(db, "before_rename", "after_rename");
+    ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+    ASSUME_ITS_TRUE(!fossil_db_crabdb_table_exists(db, "before_rename"));
+    ASSUME_ITS_TRUE(fossil_db_crabdb_table_exists(db, "after_rename"));
+    status = fossil_db_crabdb_drop_table(db, "after_rename");
+    ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+    ASSUME_ITS_TRUE(!fossil_db_crabdb_table_exists(db, "after_rename"));
+
+    status = fossil_db_crabdb_close(db);
+    ASSUME_ITS_TRUE(status == FOSSIL_DB_CRABDB_SUCCESS);
+    fossil_db_crabdb_destroy(db);
+}
+
 // * * * * * * * * * * * * * * * * * * * * * * * *
 // * Fossil Logic Test Pool
 // * * * * * * * * * * * * * * * * * * * * * * * *
@@ -347,6 +394,8 @@ FOSSIL_TEST_GROUP(c_crabdb_database_tests)
     FOSSIL_ADD_TEST(c_crabdb_fixture, c_test_crabdb_last_error);
     FOSSIL_ADD_TEST(c_crabdb_fixture, c_test_crabdb_select_empty_table);
     FOSSIL_ADD_TEST(c_crabdb_fixture, c_test_crabdb_table_edge_cases);
+    FOSSIL_ADD_TEST(c_crabdb_fixture, c_test_crabdb_value_lifecycle);
+    FOSSIL_ADD_TEST(c_crabdb_fixture, c_test_crabdb_table_rename_and_drop_missing);
 
     FOSSIL_ADD_SUITE(c_crabdb_fixture);
 } // end of tests

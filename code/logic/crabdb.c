@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 /* ============================================================
  * Internal Constants
@@ -149,6 +153,7 @@ struct fossil_db_crabdb_transaction_s
 
     fossil_db_crabdb_table_t **tables;
     size_t table_count;
+    size_t table_capacity;
 };
 
 /* ============================================================
@@ -384,8 +389,10 @@ crabdb_free_record(fossil_db_crabdb_record_t *record)
 
     for (i = 0; i < record->value_count; ++i)
     {
-        free(record->names[i]);
-        fossil_db_crabdb_value_destroy(record->values[i]);
+        if (record->names != NULL)
+            free(record->names[i]);
+        if (record->values != NULL)
+            fossil_db_crabdb_value_destroy(record->values[i]);
     }
 
     free(record->names);
@@ -408,10 +415,184 @@ crabdb_free_table(fossil_db_crabdb_table_t *table)
         crabdb_free_record(table->records[i]);
     }
 
+    for (i = 0; i < table->field_count; ++i)
+    {
+        if (table->fields[i] != NULL)
+        {
+            free(table->fields[i]->name);
+            free(table->fields[i]);
+        }
+    }
+
     free(table->records);
     free(table->fields);
     free(table->name);
     free(table);
+}
+
+static fossil_db_crabdb_record_t *
+crabdb_clone_record(const fossil_db_crabdb_record_t *source,
+                    fossil_db_crabdb_table_t *table)
+{
+    fossil_db_crabdb_record_t *record;
+    size_t i;
+
+    record = calloc(1, sizeof(*record));
+    if (record == NULL)
+        return NULL;
+
+    record->id = source->id;
+    record->table = table;
+    record->value_capacity = source->value_count;
+    if (source->value_count != 0)
+    {
+        record->names = calloc(source->value_count, sizeof(*record->names));
+        record->values = calloc(source->value_count, sizeof(*record->values));
+        if (record->names == NULL || record->values == NULL)
+        {
+            crabdb_free_record(record);
+            return NULL;
+        }
+    }
+
+    for (i = 0; i < source->value_count; ++i)
+    {
+        const fossil_db_crabdb_value_t *source_value = source->values[i];
+        fossil_db_crabdb_value_t *value;
+
+        if (source->names == NULL || source->names[i] == NULL || source_value == NULL)
+        {
+            record->value_count = i;
+            crabdb_free_record(record);
+            return NULL;
+        }
+        record->names[i] = crabdb_strdup(source->names[i]);
+        if (record->names[i] == NULL)
+        {
+            record->value_count = i + 1;
+            crabdb_free_record(record);
+            return NULL;
+        }
+
+        value = calloc(1, sizeof(*value));
+        if (value == NULL)
+        {
+            record->value_count = i + 1;
+            crabdb_free_record(record);
+            return NULL;
+        }
+        value->type = source_value->type;
+        value->size = source_value->size;
+        value->capacity = source_value->size;
+        value->owned = source_value->owned;
+        if (source_value->size != 0)
+        {
+            if (source_value->data == NULL ||
+                (value->data = malloc(source_value->size)) == NULL)
+            {
+                free(value);
+                record->value_count = i + 1;
+                crabdb_free_record(record);
+                return NULL;
+            }
+            memcpy(value->data, source_value->data, source_value->size);
+        }
+        record->values[i] = value;
+        record->value_count = i + 1;
+    }
+
+    return record;
+}
+
+static fossil_db_crabdb_table_t *
+crabdb_clone_table(const fossil_db_crabdb_table_t *source)
+{
+    fossil_db_crabdb_table_t *table;
+    size_t i;
+
+    table = calloc(1, sizeof(*table));
+    if (table == NULL)
+        return NULL;
+
+    table->name = crabdb_strdup(source->name);
+    if (table->name == NULL)
+    {
+        crabdb_free_table(table);
+        return NULL;
+    }
+    table->next_record_id = source->next_record_id;
+
+    if (source->field_count != 0)
+    {
+        table->fields = calloc(source->field_count, sizeof(*table->fields));
+        if (table->fields == NULL)
+        {
+            crabdb_free_table(table);
+            return NULL;
+        }
+        table->field_capacity = source->field_count;
+    }
+    for (i = 0; i < source->field_count; ++i)
+    {
+        fossil_db_crabdb_field_t *field;
+
+        if (source->fields == NULL || source->fields[i] == NULL)
+        {
+            crabdb_free_table(table);
+            return NULL;
+        }
+        field = calloc(1, sizeof(*field));
+        if (field == NULL)
+        {
+            crabdb_free_table(table);
+            return NULL;
+        }
+        *field = *source->fields[i];
+        field->name = crabdb_strdup(source->fields[i]->name);
+        if (field->name == NULL)
+        {
+            free(field);
+            crabdb_free_table(table);
+            return NULL;
+        }
+        table->fields[table->field_count++] = field;
+    }
+
+    if (source->record_count != 0)
+    {
+        table->records = calloc(source->record_count, sizeof(*table->records));
+        if (table->records == NULL)
+        {
+            crabdb_free_table(table);
+            return NULL;
+        }
+        table->record_capacity = source->record_count;
+    }
+    for (i = 0; i < source->record_count; ++i)
+    {
+        if (source->records == NULL || source->records[i] == NULL ||
+            (table->records[i] = crabdb_clone_record(source->records[i], table)) == NULL)
+        {
+            crabdb_free_table(table);
+            return NULL;
+        }
+        table->record_count++;
+    }
+
+    return table;
+}
+
+static void
+crabdb_free_transaction(fossil_db_crabdb_transaction_t *transaction)
+{
+    size_t i;
+
+    if (transaction == NULL)
+        return;
+    for (i = 0; i < transaction->table_count; ++i)
+        crabdb_free_table(transaction->tables[i]);
+    free(transaction->tables);
+    free(transaction);
 }
 
 static bool
@@ -535,6 +716,7 @@ crabdb_load(fossil_db_crabdb_t *db)
         for (j = 0; j < record_count; ++j)
         {
             fossil_db_crabdb_record_t *record = calloc(1, sizeof(*record));
+            fossil_db_crabdb_record_t **records;
             if (record == NULL || !crabdb_read(file, &record->id, sizeof(record->id)) ||
                 !crabdb_read(file, &record->value_count, sizeof(record->value_count)) ||
                 record->value_count > 100000)
@@ -585,13 +767,16 @@ crabdb_load(fossil_db_crabdb_t *db)
             }
             if (record->id > table->next_record_id)
                 table->next_record_id = record->id;
-            table->records = realloc(table->records, sizeof(*table->records) * (table->record_count + 1));
-            if (table->records == NULL)
+            records = realloc(
+                table->records,
+                sizeof(*records) * (table->record_count + 1));
+            if (records == NULL)
             {
                 crabdb_free_record(record);
                 fclose(file);
                 return false;
             }
+            table->records = records;
             table->records[table->record_count++] = record;
         }
     }
@@ -604,20 +789,35 @@ static bool
 crabdb_save(fossil_db_crabdb_t *db)
 {
     FILE *file;
+    char *temporary_path;
+    size_t path_length;
     uint32_t magic = 0x31424443; /* CDB1 */
     size_t i, j, k;
 
     if (db->memory || db->path == NULL)
         return true;
 
-    file = fopen(db->path, "wb");
-    if (file == NULL)
+    path_length = strlen(db->path);
+    temporary_path = malloc(path_length + sizeof(".tmp"));
+    if (temporary_path == NULL)
         return false;
+
+    memcpy(temporary_path, db->path, path_length);
+    memcpy(temporary_path + path_length, ".tmp", sizeof(".tmp"));
+
+    file = fopen(temporary_path, "wb");
+    if (file == NULL)
+    {
+        free(temporary_path);
+        return false;
+    }
 
     if (fwrite(&magic, sizeof(magic), 1, file) != 1 ||
         fwrite(&db->table_count, sizeof(db->table_count), 1, file) != 1)
     {
         fclose(file);
+        remove(temporary_path);
+        free(temporary_path);
         return false;
     }
 
@@ -631,6 +831,8 @@ crabdb_save(fossil_db_crabdb_t *db)
             fwrite(&table->field_count, sizeof(table->field_count), 1, file) != 1)
         {
             fclose(file);
+            remove(temporary_path);
+            free(temporary_path);
             return false;
         }
 
@@ -648,6 +850,8 @@ crabdb_save(fossil_db_crabdb_t *db)
                 fwrite(&field->unique, sizeof(field->unique), 1, file) != 1)
             {
                 fclose(file);
+                remove(temporary_path);
+                free(temporary_path);
                 return false;
             }
         }
@@ -655,6 +859,8 @@ crabdb_save(fossil_db_crabdb_t *db)
         if (fwrite(&table->record_count, sizeof(table->record_count), 1, file) != 1)
         {
             fclose(file);
+            remove(temporary_path);
+            free(temporary_path);
             return false;
         }
         for (j = 0; j < table->record_count; ++j)
@@ -664,6 +870,8 @@ crabdb_save(fossil_db_crabdb_t *db)
                 fwrite(&record->value_count, sizeof(record->value_count), 1, file) != 1)
             {
                 fclose(file);
+                remove(temporary_path);
+                free(temporary_path);
                 return false;
             }
             for (k = 0; k < record->value_count; ++k)
@@ -677,13 +885,37 @@ crabdb_save(fossil_db_crabdb_t *db)
                     (value->size != 0 && fwrite(value->data, 1, value->size, file) != value->size))
                 {
                     fclose(file);
+                    remove(temporary_path);
+                    free(temporary_path);
                     return false;
                 }
             }
         }
     }
 
-    return fclose(file) == 0;
+    if (fclose(file) != 0)
+    {
+        remove(temporary_path);
+        free(temporary_path);
+        return false;
+    }
+
+#if defined(_WIN32)
+    if (!MoveFileExA(
+            temporary_path,
+            db->path,
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+#else
+    if (rename(temporary_path, db->path) != 0)
+#endif
+    {
+        remove(temporary_path);
+        free(temporary_path);
+        return false;
+    }
+
+    free(temporary_path);
+    return true;
 }
 
 /* ============================================================
@@ -767,6 +999,15 @@ fossil_db_crabdb_create(
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
 
+    /* CREATE must never silently truncate an existing database. */
+    file = fopen(path, "rb");
+
+    if (file != NULL)
+    {
+        fclose(file);
+        return FOSSIL_DB_CRABDB_ALREADY_EXISTS;
+    }
+
     file = fopen(path, "wb");
 
     if (file == NULL)
@@ -809,7 +1050,15 @@ fossil_db_crabdb_open(
         return FOSSIL_DB_CRABDB_OUT_OF_MEMORY;
     if (!crabdb_load(*db))
     {
-        fossil_db_crabdb_destroy(*db);
+        size_t i;
+        fossil_db_crabdb_t *failed = *db;
+
+        /* A failed load must not call close(): close() persists state. */
+        for (i = 0; i < failed->table_count; ++i)
+            crabdb_free_table(failed->tables[i]);
+        free(failed->tables);
+        free(failed->path);
+        free(failed);
         *db = NULL;
         return FOSSIL_DB_CRABDB_CORRUPTED;
     }
@@ -922,6 +1171,11 @@ fossil_db_crabdb_create_table(
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
 
+    if (db->read_only)
+    {
+        return FOSSIL_DB_CRABDB_READ_ONLY;
+    }
+
     if (crabdb_find_table(db, name) != NULL)
     {
         crabdb_set_error(
@@ -985,6 +1239,9 @@ fossil_db_crabdb_drop_table(
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
 
+    if (db->read_only)
+        return FOSSIL_DB_CRABDB_READ_ONLY;
+
     for (i = 0; i < db->table_count; ++i)
     {
         table = db->tables[i];
@@ -1036,6 +1293,9 @@ fossil_db_crabdb_rename_table(
     {
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
+
+    if (db->read_only)
+        return FOSSIL_DB_CRABDB_READ_ONLY;
 
     table = crabdb_find_table(
         db,
@@ -1127,6 +1387,9 @@ fossil_db_crabdb_insert(
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
 
+    if (db->read_only)
+        return FOSSIL_DB_CRABDB_READ_ONLY;
+
     if (!fossil_db_crabdb_table_exists(db, table))
     {
         crabdb_set_error(
@@ -1172,6 +1435,9 @@ fossil_db_crabdb_update(
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
 
+    if (db->read_only)
+        return FOSSIL_DB_CRABDB_READ_ONLY;
+
     if (!fossil_db_crabdb_table_exists(db, table))
     {
         return FOSSIL_DB_CRABDB_NOT_FOUND;
@@ -1211,6 +1477,9 @@ fossil_db_crabdb_delete(
     {
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
     }
+
+    if (db->read_only)
+        return FOSSIL_DB_CRABDB_READ_ONLY;
 
     if (!fossil_db_crabdb_table_exists(db, table))
     {
@@ -1361,6 +1630,9 @@ fossil_db_crabdb_status_t
 fossil_db_crabdb_begin(
     fossil_db_crabdb_t *db)
 {
+    fossil_db_crabdb_transaction_t *transaction;
+    size_t i;
+
     if (!crabdb_valid_db(db))
     {
         return FOSSIL_DB_CRABDB_INVALID_ARGUMENT;
@@ -1375,6 +1647,34 @@ fossil_db_crabdb_begin(
         return FOSSIL_DB_CRABDB_TRANSACTION_ERROR;
     }
 
+    transaction = calloc(1, sizeof(*transaction));
+    if (transaction == NULL)
+        return FOSSIL_DB_CRABDB_OUT_OF_MEMORY;
+
+    if (db->table_count != 0)
+    {
+        transaction->tables = calloc(db->table_count, sizeof(*transaction->tables));
+        if (transaction->tables == NULL)
+        {
+            free(transaction);
+            return FOSSIL_DB_CRABDB_OUT_OF_MEMORY;
+        }
+
+        transaction->table_capacity = db->table_count;
+        for (i = 0; i < db->table_count; ++i)
+        {
+            if (db->tables == NULL || db->tables[i] == NULL ||
+                (transaction->tables[i] = crabdb_clone_table(db->tables[i])) == NULL)
+            {
+                crabdb_free_transaction(transaction);
+                return FOSSIL_DB_CRABDB_OUT_OF_MEMORY;
+            }
+            transaction->table_count++;
+        }
+    }
+    transaction->active = true;
+
+    db->transaction = transaction;
     db->transaction_active = true;
     db->transaction_table_count = db->table_count;
 
@@ -1399,6 +1699,8 @@ fossil_db_crabdb_commit(
         return FOSSIL_DB_CRABDB_TRANSACTION_ERROR;
     }
 
+    crabdb_free_transaction(db->transaction);
+    db->transaction = NULL;
     db->transaction_active = false;
 
     return FOSSIL_DB_CRABDB_SUCCESS;
@@ -1409,6 +1711,7 @@ fossil_db_crabdb_rollback(
     fossil_db_crabdb_t *db)
 {
     size_t i;
+    fossil_db_crabdb_transaction_t *transaction;
 
     if (!crabdb_valid_db(db))
     {
@@ -1424,14 +1727,25 @@ fossil_db_crabdb_rollback(
         return FOSSIL_DB_CRABDB_TRANSACTION_ERROR;
     }
 
-    /* Discard tables created after the transaction began. */
-    for (i = db->transaction_table_count; i < db->table_count; ++i)
+    transaction = db->transaction;
+    if (transaction == NULL || !transaction->active)
+        return FOSSIL_DB_CRABDB_TRANSACTION_ERROR;
+
+    /* Replace the modified tables with the transaction's saved snapshot. */
+    for (i = 0; i < db->table_count; ++i)
     {
         crabdb_free_table(db->tables[i]);
-        db->tables[i] = NULL;
     }
+    free(db->tables);
 
-    db->table_count = db->transaction_table_count;
+    db->tables = transaction->tables;
+    db->table_count = transaction->table_count;
+    db->table_capacity = transaction->table_capacity;
+    transaction->tables = NULL;
+    transaction->table_count = 0;
+
+    crabdb_free_transaction(transaction);
+    db->transaction = NULL;
     db->transaction_active = false;
 
     return FOSSIL_DB_CRABDB_SUCCESS;
